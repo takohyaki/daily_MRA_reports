@@ -1,30 +1,23 @@
-import os
-import argparse
-from email import policy
-from email.parser import BytesParser
-from email.utils import parsedate_to_datetime
-from datetime import datetime
 import re
+from bs4 import BeautifulSoup
 import pandas as pd
-import openpyxl
+from datetime import datetime, timedelta
 from openpyxl.utils import get_column_letter
 
-def parse_email(file_path):
-    with open(file_path, 'rb') as file:
-        email = BytesParser(policy=policy.default).parse(file)
-
+def parse_email(email):
     # Extract Application/Claim from the subject
-    subject = email['Subject']
+    subject = email.get('subject', 'N/A')
+
     if "Claim" in subject:
         application_claim = "Claim"
-    elif "Application" in subject:
+    elif "application" in subject:
         application_claim = "Application"
     else:
         application_claim = 'N/A'
 
     # Use email's date header for Date Received and parse it
-    date_received_header = email['Date']
-    date_received = parsedate_to_datetime(date_received_header).replace(tzinfo=None) if date_received_header else None
+    date_received_header = email.get('receivedDateTime', '')
+    date_received = datetime.fromisoformat(date_received_header[:-1]) if date_received_header else None
 
     # Calculate days since received
     today = datetime.today()
@@ -33,35 +26,58 @@ def parse_email(file_path):
         days_since_received = (today - date_received).days
 
     # Extract other details as before
-    body = email.get_body(preferencelist=('plain',)).get_content()
+    body_content = email.get('body', {}).get('content', 'N/A')
+    soup = BeautifulSoup(body_content, 'lxml')
+    td_tags = soup.find_all('td')
 
-    # Extract specific details
-    company_name_match = re.search(r'Company Name\s*\n\s*(.+)', body)
-    company_name = company_name_match.group(1).strip() if company_name_match else 'N/A'
+    company_name, reference_id, project_title, deadline, queries = 'N/A', 'N/A', 'N/A', 'N/A', 'N/A'
 
-    reference_id_match = re.search(r'Ref ID\s*\n\s*(\S+)', body)
-    reference_id = reference_id_match.group(1).strip() if reference_id_match else 'N/A'
+    for i in range(len(td_tags) - 1):
+        text = td_tags[i].get_text(strip=True)
+        next_text = td_tags[i+1].get_text(strip=True)
 
-    project_title_match = re.search(r'Project Title\s*\n\s*(.+)', body)
-    project_title = project_title_match.group(1).strip() if project_title_match else 'N/A'
+        if 'Company Name' in text:
+            company_name = next_text
+        elif 'Ref ID' in text:
+            reference_id = next_text
+        elif 'Project Title' in text:
+            project_title = next_text
+        elif 'Note from processing officer' in text:
+            queries = next_text
+            break 
 
-    deadline_match = re.search(r'We would appreciate a response by (\d+ \w+ \d+)', body)
-    deadline = deadline_match.group(1) if deadline_match else 'N/A'
+    deadline_patterns = [
+        r'Please respond with the necessary documents.*within a week\(7 Days\)',
+        r'We would appreciate a response by (\d+ \w+ \d+)',
+        r'response required by (\d+ \w+ \d+)',
+        # Add more patterns here if necessary
+    ]
+
+    for pattern in deadline_patterns:
+        deadline_match = soup.find(string=re.compile(pattern))
+        if deadline_match:
+            if "week" in deadline_match:
+                deadline = (today + timedelta(days=7)).strftime('%d %b %Y')
+            else:
+                date_match = re.search(r'(\d+ \w+ \d+)', deadline_match)
+                if date_match:
+                    deadline = date_match.group(1)
+            break    
 
     # Extract Queries
-    queries_start_match = body.find("Please clarify the reason why.")
-    queries_end_match = body.find("Thanks. We would appreciate a response", queries_start_match)
-    queries = body[queries_start_match:queries_end_match].strip() if queries_start_match != -1 and queries_end_match != -1 else 'N/A'
+    # queries_start_match = body_content.find("Please clarify the reason why.")
+    # queries_end_match = body_content.find("Thanks. We would appreciate a response", queries_start_match)
+    # queries = body_content[queries_start_match:queries_end_match].strip() if queries_start_match != -1 and queries_end_match != -1 else 'N/A'
 
     return {
+        "Subject": subject,
         "Company Name": company_name,
         "Reference ID": reference_id,
         "Project Title": project_title,
         "Application/Claim": application_claim,
         "Date Received": date_received_header,
         "# of Days Since Received": days_since_received,
-        "Deadline": deadline,
-        "Queries": queries
+        "Deadline": deadline
     }
 
 def save_to_excel(extracted_data, excel_file_path):
@@ -91,29 +107,29 @@ def save_to_excel(extracted_data, excel_file_path):
             adjusted_width = (max_length + 2) * 1.2  # Adjust the multiplier as needed
             worksheet.column_dimensions[get_column_letter(column[0].column)].width = adjusted_width
 
-def main():
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description='Process emails and save data to an Excel file.')
-    parser.add_argument('email_file', help='Relative path to the email file from the script directory (e.g., sample_emails/email.eml)')
-    parser.add_argument('excel_file', help='Relative path to the Excel file from the script directory (e.g., output_data/excel_file.xlsx)')
+# def main():
+#     # Set up argument parser
+#     parser = argparse.ArgumentParser(description='Process emails and save data to an Excel file.')
+#     parser.add_argument('email_file', help='Relative path to the email file from the script directory (e.g., sample_emails/email.eml)')
+#     parser.add_argument('excel_file', help='Relative path to the Excel file from the script directory (e.g., output_data/excel_file.xlsx)')
 
-    # Parse arguments
-    args = parser.parse_args()
+#     # Parse arguments
+#     args = parser.parse_args()
 
-    # Get the script's directory
-    script_dir = os.path.dirname(os.path.realpath(__file__))
+#     # Get the script's directory
+#     script_dir = os.path.dirname(os.path.realpath(__file__))
 
-    # Construct full paths for the email and Excel files
-    full_email_path = os.path.join(script_dir, args.email_file)
-    full_excel_path = os.path.join(script_dir, args.excel_file)
+#     # Construct full paths for the email and Excel files
+#     full_email_path = os.path.join(script_dir, args.email_file)
+#     full_excel_path = os.path.join(script_dir, args.excel_file)
 
-    # Run the main functionality
-    extracted_data = parse_email(full_email_path)
-    save_to_excel(extracted_data, full_excel_path)
-    print(f"Data from {full_email_path} has been saved to {full_excel_path}")
+#     # Run the main functionality
+#     extracted_data = parse_email(full_email_path)
+#     save_to_excel(extracted_data, full_excel_path)
+#     print(f"Data from {full_email_path} has been saved to {full_excel_path}")
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
 
 # Example usage
 # file_path = "/sample_emails/FW_ Updates required_ Claim 2302MFKX-CL01 on hold.eml"
@@ -121,5 +137,7 @@ if __name__ == "__main__":
 # print(extracted_data)
 # excel_file_path = "/sample_file/MRA_daily_updates.xlsx"
 # save_to_excel(extracted_data, excel_file_path)
+
+#TODO: connect to excel file in Microsoft 365
 
 

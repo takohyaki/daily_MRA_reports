@@ -13,3 +13,11 @@ For example,
 ```
 python email_parser.py "sample_emails/FW_ Updates required_ Claim 2302MFKX-CL01 on hold.eml" "sample_file/MRA_daily_updates.xlsx"
 ``````
+
+grants.support@simplegroup.sg
+
+client secret value 
+Nnx8Q~XEXNZ.GEVhY8NY3sUPGIH8uVOxoCxxvaNM
+
+secret id
+e3e63d11-011a-4db0-9949-33041369bd5f
